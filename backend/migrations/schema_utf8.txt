@@ -1,0 +1,4 @@
+﻿[dotenv@17.3.1] injecting env (3) from .env -- tip: ΓÜÖ∩╕Å  enable debug logging with { debug: true }
+MENTOR_MAPPINGS: id, student_id, mentor_id, college_id, active, created_at
+AUDIT_LOGS: id, actor_id, college_id, role, action, entity_type, entity_id, metadata, timestamp, created_at
+ROLES: id, name, level, created_at

@@ -1,0 +1,3 @@
+[submodule "edulink-the-core"]
+	path = edulink-the-core
+	url = https://github.com/Silveraxe69/edulink-the-core.git

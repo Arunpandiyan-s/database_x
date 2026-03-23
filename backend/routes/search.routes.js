@@ -6,7 +6,8 @@
 const express = require('express');
 const router = express.Router();
 const SearchController = require('../controllers/search.controller');
+const { authorizeRoles, SUPPORTED_ROLES } = require('../middleware/auth.middleware');
 
-router.get('/', SearchController.search);
+router.get('/', authorizeRoles(...SUPPORTED_ROLES), SearchController.search);
 
 module.exports = router;

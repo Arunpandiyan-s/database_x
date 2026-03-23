@@ -13,16 +13,16 @@
 const express = require('express');
 const router = express.Router();
 const AttendanceController = require('../controllers/attendance.controller');
-const { authorizeRoles, authorize } = require('../middleware/auth.middleware');
+const { authorizeRoles, authorize, SUPPORTED_ROLES } = require('../middleware/auth.middleware');
 
 // ─── Class Management ─────────────────────────────────────────────────────────
-router.get('/classes', AttendanceController.getClasses);
+router.get('/classes', authorizeRoles('mentor', 'class_advisor', 'hod', 'cluster_hod', 'vice_principal', 'principal', 'technical_director', 'admin'), AttendanceController.getClasses);
 router.post('/classes', authorizeRoles('admin'), AttendanceController.createClass);
-router.get('/classes/:classId', AttendanceController.getClassById);
-router.get('/classes/:classId/students', AttendanceController.getStudentsInClass);
+router.get('/classes/:classId', authorizeRoles('class_advisor', 'hod', 'cluster_hod', 'device', 'vice_principal', 'principal', 'technical_director', 'admin', 'mentor'), AttendanceController.getClassById);
+router.get('/classes/:classId/students', authorizeRoles('class_advisor', 'hod', 'cluster_hod', 'device', 'vice_principal', 'principal', 'technical_director', 'admin', 'mentor'), AttendanceController.getStudentsInClass);
 
 // ─── Attendance ───────────────────────────────────────────────────────────────
-router.get('/class/:classId/date/:date', AttendanceController.getAttendanceByDate);
+router.get('/class/:classId/date/:date', authorizeRoles('class_advisor', 'hod', 'cluster_hod', 'vice_principal', 'principal', 'technical_director', 'admin', 'mentor'), AttendanceController.getAttendanceByDate);
 router.post('/', authorizeRoles('class_advisor', 'admin'), AttendanceController.saveAttendance);
 router.put('/class/:classId/date/:date', authorizeRoles('class_advisor', 'admin'), AttendanceController.updateAttendance);
 

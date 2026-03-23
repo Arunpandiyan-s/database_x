@@ -58,6 +58,45 @@ class LeaveRepository {
     );
     return result.rows[0];
   }
+
+  static async findMentorIdForStudent(studentId, client) {
+    const mentor = await client.query(
+      `SELECT mentor_id FROM student_profiles WHERE student_id = $1`,
+      [studentId]
+    );
+    return mentor.rows[0]?.mentor_id || null;
+  }
+
+  static async createLeave({ studentId, mentorId, collegeId, departmentId, fromDate, toDate, reason }, client) {
+    const result = await client.query(
+      `INSERT INTO leave_requests
+          (student_id, mentor_id, college_id, department_id, from_date, to_date, reason, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending_mentor')
+       RETURNING *`,
+      [studentId, mentorId, collegeId || null, departmentId || null, fromDate, toDate, reason]
+    );
+    return result.rows[0];
+  }
+
+  static async rejectLeave({ id, remarks }, client) {
+    const result = await client.query(
+      `UPDATE leave_requests
+       SET status = 'rejected', remarks = $1, updated_at = NOW()
+       WHERE id = $2 AND status NOT IN ('approved','rejected','ARCHIVED')
+       RETURNING *`,
+      [remarks || null, id]
+    );
+    return result.rows[0] || null;
+  }
+
+  static async parentConfirm(id, client) {
+    const result = await client.query(
+      `UPDATE leave_requests SET parent_confirmed = true, updated_at = NOW()
+       WHERE id = $1 RETURNING student_id`,
+      [id]
+    );
+    return result.rows[0]?.student_id || null;
+  }
 }
 
 module.exports = LeaveRepository;

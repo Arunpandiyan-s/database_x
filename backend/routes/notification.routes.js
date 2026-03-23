@@ -9,8 +9,10 @@ const express = require('express');
 const router = express.Router();
 const NotificationController = require('../controllers/notification.controller');
 
-router.get('/', NotificationController.getNotifications);
-router.put('/read-all', NotificationController.markAllRead);
-router.put('/:id/read', NotificationController.markRead);
+const { authorizeRoles, SUPPORTED_ROLES } = require('../middleware/auth.middleware');
+
+router.get('/', authorizeRoles(...SUPPORTED_ROLES), NotificationController.getNotifications);
+router.put('/read-all', authorizeRoles(...SUPPORTED_ROLES), NotificationController.markAllRead);
+router.put('/:id/read', authorizeRoles(...SUPPORTED_ROLES), NotificationController.markRead);
 
 module.exports = router;

@@ -6,7 +6,8 @@
 const express = require('express');
 const router = express.Router();
 const DashboardController = require('../controllers/dashboard.controller');
+const { authorizeRoles, SUPPORTED_ROLES } = require('../middleware/auth.middleware');
 
-router.get('/metrics', DashboardController.getMetrics);
+router.get('/metrics', authorizeRoles(...SUPPORTED_ROLES), DashboardController.getMetrics);
 
 module.exports = router;

@@ -11,34 +11,14 @@
 
 const express = require('express');
 const router = express.Router();
-const path = require('path');
-const fs = require('fs');
-const multer = require('multer');
+const { uploadResultFile } = require('../middleware/upload.middleware');
 const ResultsController = require('../controllers/results.controller');
 const { authorizeRoles } = require('../middleware/auth.middleware');
 
-// ─── Multer Upload for Result PDFs ────────────────────────────────────────────
-const UPLOADS_DIR = path.join(__dirname, '..', 'uploads', 'results');
-if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-
-const storage = multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, UPLOADS_DIR),
-    filename: (_req, file, cb) => {
-        const ext = path.extname(file.originalname).toLowerCase();
-        cb(null, `${Date.now()}${ext}`);
-    },
-});
-const fileFilter = (_req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    if (ext === '.pdf') return cb(null, true);
-    cb(new Error('Only PDF files are allowed for result uploads.'), false);
-};
-const upload = multer({ storage, fileFilter, limits: { fileSize: 5 * 1024 * 1024 } });
-
 // ─── Routes ───────────────────────────────────────────────────────────────────
 router.get('/me', ResultsController.getMyResults);
-router.get('/student/:studentId', authorizeRoles('mentor', 'hod', 'cluster_hod', 'principal', 'technical_director', 'admin'), ResultsController.getStudentResults);
-router.post('/upload', authorizeRoles('mentor', 'hod', 'admin'), upload.single('file'), ResultsController.uploadResult);
+router.get('/student/:studentId', authorizeRoles('mentor', 'hod', 'cluster_hod', 'principal', 'technical_director', 'admin', 'parent'), ResultsController.getStudentResults);
+router.post('/upload', authorizeRoles('mentor', 'hod', 'admin'), uploadResultFile.single('file'), ResultsController.uploadResult);
 router.put('/:id', authorizeRoles('mentor', 'hod', 'admin'), ResultsController.editResult);
 router.delete('/:id', authorizeRoles('mentor', 'hod', 'admin'), ResultsController.deleteResult);
 router.get('/:id/download', ResultsController.downloadResult);

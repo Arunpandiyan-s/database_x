@@ -12,117 +12,108 @@
 
 const express = require('express');
 const router = express.Router();
-const path = require('path');
-const fs = require('fs');
-const multer = require('multer');
+const { uploadStudentDocument, uploadStudentPhoto } = require('../middleware/upload.middleware');
 const { pool } = require('../utils/transaction.util');
-
-// ─── Local file storage with multer ──────────────────────────────────────────
-// Files land in  backend/uploads/<studentId>/<docType>-<timestamp>.<ext>
-const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
-if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-
-const storage = multer.diskStorage({
-    destination: (req, _file, cb) => {
-        const studentId = req.user?.userId || 'unknown';
-        const dir = path.join(UPLOADS_DIR, studentId);
-        fs.mkdirSync(dir, { recursive: true });
-        cb(null, dir);
-    },
-    filename: (_req, file, cb) => {
-        const ext = path.extname(file.originalname).toLowerCase();
-        cb(null, `${Date.now()}${ext}`);
-    },
-});
-
-const fileFilter = (_req, file, cb) => {
-    const allowed = ['.pdf', '.jpg', '.jpeg', '.png'];
-    const ext = path.extname(file.originalname).toLowerCase();
-    if (allowed.includes(ext)) return cb(null, true);
-    cb(new Error('Only PDF, JPG, JPEG, and PNG files are allowed.'), false);
-};
-
-const upload = multer({
-    storage,
-    fileFilter,
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
-});
+const { authorizeRoles } = require('../middleware/auth.middleware');
 
 // ─── Helper: profile row → camelCase object ───────────────────────────────────
 function mapProfile(row) {
     if (!row) return null;
     return {
         id: row.id,
-        studentId: row.student_id,
+        userId: row.student_id,
         mentorId: row.mentor_id,
+
         // Basic
-        name: row.name,
-        gender: row.gender,
-        dob: row.dob,
-        nationality: row.nationality,
-        religion: row.religion,
-        community: row.community,
-        communityCertNumber: row.community_cert_number,
-        bloodGroup: row.blood_group,
+        name: row.name || '',
+        gender: row.gender || '',
+        dob: row.dob ? new Date(row.dob).toISOString().split('T')[0] : '',
+        nationality: row.nationality || '',
+        religion: row.religion || '',
+        community: row.community || '',
+        communityCertNumber: row.community_cert_number || '',
+        bloodGroup: row.blood_group || '',
+
         // Contact
-        emisNumber: row.emis_number,
-        aadhaarNumber: row.aadhaar_number,
-        phone: row.phone,
-        email: row.email,
-        parentPhone: row.parent_phone,
-        parentEmail: row.parent_email,
-        permanentAddress: row.permanent_address,
-        communicationAddress: row.communication_address,
-        communicationDistrict: row.communication_district,
-        communicationTown: row.communication_town,
-        communicationVillagePanchayat: row.communication_village,
+        emisNumber: row.emis_number || '',
+        aadhaarNumber: row.aadhaar_number || '',
+        phone: row.phone || '',
+        email: row.email || '',
+        parentPhone: row.parent_phone || '',
+        parentEmail: row.parent_email || '',
+        permanentAddress: row.permanent_address || '',
+        communicationAddress: row.communication_address || '',
+        communicationDistrict: row.communication_district || '',
+        communicationTown: row.communication_town || '',
+        communicationVillagePanchayat: row.communication_village || '',
+        pinCode: row.pin_code || '',
+
         // Bank
-        bankAccountNumber: row.bank_account_number,
-        bankAccountHolderName: row.bank_holder_name,
-        bankName: row.bank_name,
-        bankBranchName: row.bank_branch_name,
-        bankIfscCode: row.bank_ifsc_code,
+        bankAccountNumber: row.bank_account_number || '',
+        bankAccountHolderName: row.bank_holder_name || '',
+        bankName: row.bank_name || '',
+        bankBranchName: row.bank_branch_name || '',
+        bankIfscCode: row.bank_ifsc_code || '',
+
         // Parent
-        fatherName: row.father_name,
-        motherName: row.mother_name,
-        guardianName: row.guardian_name,
-        siblingName: row.sibling_name,
-        siblingOccupation: row.sibling_occupation,
-        parentOccupation: row.parent_occupation,
-        parentAnnualIncome: row.parent_annual_income,
-        fatherPhone: row.father_phone,
-        motherPhone: row.mother_phone,
+        fatherPhoto: row.documents?.fatherPhoto || '',
+        motherPhoto: row.documents?.motherPhoto || '',
+        guardianPhoto: row.documents?.guardianPhoto || '',
+        fatherName: row.father_name || '',
+        motherName: row.mother_name || '',
+        guardianName: row.guardian_name || '',
+        siblingName: row.sibling_name || '',
+        siblingOccupation: row.sibling_occupation || '',
+        fatherOccupation: row.parent_occupation || '',
+        motherOccupation: row.mother_occupation || '',
+        parentAnnualIncome: row.parent_annual_income || '',
+        fatherPhone: row.father_phone || '',
+        motherPhone: row.mother_phone || '',
+
         // Academic
-        registerNumber: row.register_number,
-        admissionDate: row.admission_date,
-        academicYear: row.academic_year,
-        programme: row.programme,
-        courseBranch: row.course_branch,
-        department: row.department,
-        year: row.year,
-        section: row.section,
-        semester: row.semester,
-        modeOfAdmission: row.mode_of_admission,
-        mediumOfInstruction: row.medium_of_instruction,
-        previousInstitution: row.previous_institution,
-        previousInstitutionAddress: row.previous_institution_address,
-        yearOfPassing: row.year_of_passing,
-        board: row.board,
-        marksOrCutoff: row.marks_or_cutoff,
-        admissionQuota: row.admission_quota,
-        scholarship: row.scholarship,
-        // Document paths (stored as JSON or individual columns)
-        documents: row.documents || {},
-        photoUrl: row.photo_url,
-        // Status
-        profileStatus: row.status,
-        profileSubmitted: row.profile_submitted,
-        editRequestPending: row.edit_request_pending,
+        registerNumber: row.register_number || '',
+        admissionDate: row.admission_date ? new Date(row.admission_date).toISOString().split('T')[0] : '',
+        markSheet: row.documents?.marksheet12 || row.documents?.marksheet10 || '',
+        academicYear: row.academic_year || '',
+        programme: row.programme || '',
+        courseBranch: row.course_branch || '',
+        department: row.department || '',
+        year: row.year || 1,
+        section: row.section || '',
+        semester: row.semester || 1,
+        modeOfAdmission: row.mode_of_admission || '',
+        mediumOfInstruction: row.medium_of_instruction || '',
+
+        // Academic History
+        tenthInstitutionName: row.tenth_institution_name || '',
+        tenthBoard: row.tenth_board || '',
+        tenthPercentage: row.tenth_percentage || '',
+        eleventhInstitutionName: row.eleventh_institution_name || '',
+        eleventhBoard: row.eleventh_board || '',
+        eleventhPercentage: row.eleventh_percentage || '',
+        twelfthInstitutionName: row.twelfth_institution_name || '',
+        twelfthBoard: row.twelfth_board || '',
+        twelfthPercentage: row.twelfth_percentage || '',
+
+        // Photo
+        photo: row.photo_url || '',
+
+        // Admission & Scholarship
+        admissionQuota: row.admission_quota || '',
+        scholarship: row.scholarship || '',
+
+        // Metadata
+        profileStatus: row.status || 'DRAFT',
+        profileSubmitted: !!row.profile_submitted,
+        editRequestPending: !!row.edit_request_pending,
+        quotaEditRequested: !!row.quota_edit_requested,
+        scholarshipEditRequested: !!row.scholarship_edit_requested,
+        tempUnlockExpiry: row.temp_unlock_expiry || undefined,
     };
 }
 
 // ─── GET /students/me ─────────────────────────────────────────────────────────
-router.get('/me', async (req, res, next) => {
+router.get('/me', authorizeRoles('student'), async (req, res, next) => {
     try {
         const userId = req.user.userId;
         let result = await pool.query(
@@ -150,7 +141,7 @@ router.get('/me', async (req, res, next) => {
 });
 
 // ─── PUT /students/me ─────────────────────────────────────────────────────────
-router.put('/me', async (req, res, next) => {
+router.put('/me', authorizeRoles('student'), async (req, res, next) => {
     try {
         const userId = req.user.userId;
 
@@ -288,70 +279,71 @@ router.put('/me', async (req, res, next) => {
 
 // ─── POST /students/me/documents/:docType ────────────────────────────────────
 // docType: community | aadhaar | marksheet10 | marksheet12 | firstgrad | transfer | allotment | photo
-router.post('/me/documents/:docType', upload.single('file'), async (req, res, next) => {
+router.post('/me/documents/:docType', authorizeRoles('student'), (req, res, next) => {
+    if (req.params.docType === 'photo') {
+        uploadStudentPhoto.single('file')(req, res, next);
+    } else {
+        uploadStudentDocument.single('file')(req, res, next);
+    }
+}, async (req, res, next) => {
     try {
         if (!req.file) {
-            return res.status(400).json({ error: 'No file uploaded.' });
+            return res.status(400).json({ success: false, message: 'No file uploaded or file rejected by filter.' });
         }
 
         const userId = req.user.userId;
         const docType = req.params.docType;
+        const { pool } = require('../utils/transaction.util');
 
         const ALLOWED_DOC_TYPES = ['community', 'aadhaar', 'marksheet10', 'marksheet12',
             'firstgrad', 'transfer', 'allotment', 'photo'];
+
         if (!ALLOWED_DOC_TYPES.includes(docType)) {
-            fs.unlinkSync(req.file.path); // clean up
-            return res.status(400).json({ error: `Unknown document type: ${docType}` });
+            const fs = require('fs');
+            fs.unlinkSync(req.file.path);
+            return res.status(400).json({ success: false, message: `Unknown document type: ${docType}` });
         }
 
-        // Store relative path (relative to backend root) so it's portable
-        const relativePath = path.relative(
-            path.join(__dirname, '..'),
-            req.file.path
-        ).replace(/\\/g, '/'); // normalise to forward slashes
+        const folderName = require('path').basename(req.file.destination);
+        const fileUrl = `/uploads/${folderName}/${req.file.filename}`;
 
-        // Fetch current documents JSONB column
         const existing = await pool.query(
             'SELECT documents, photo_url FROM student_profiles WHERE student_id = $1',
             [userId]
         );
+
         if (existing.rows.length === 0) {
-            return res.status(404).json({ error: 'Profile not found. Save your profile first.' });
+            return res.status(404).json({ success: false, message: 'Profile not found. Save your profile first.' });
         }
 
-        let updateQuery, updateParams;
         if (docType === 'photo') {
-            updateQuery = `UPDATE student_profiles SET photo_url = $1, updated_at = NOW()
-                           WHERE student_id = $2 RETURNING photo_url`;
-            updateParams = [relativePath, userId];
+            await pool.query(
+                `UPDATE student_profiles SET photo_url = $1, updated_at = NOW() WHERE student_id = $2`,
+                [fileUrl, userId]
+            );
         } else {
             const currentDocs = existing.rows[0].documents || {};
-            currentDocs[docType] = relativePath;
-            updateQuery = `UPDATE student_profiles SET documents = $1::jsonb, updated_at = NOW()
-                           WHERE student_id = $2 RETURNING documents`;
-            updateParams = [JSON.stringify(currentDocs), userId];
+            currentDocs[docType] = fileUrl;
+            await pool.query(
+                `UPDATE student_profiles SET documents = $1::jsonb, updated_at = NOW() WHERE student_id = $2`,
+                [JSON.stringify(currentDocs), userId]
+            );
         }
 
-        const result = await pool.query(updateQuery, updateParams);
-
-        return res.json({
-            message: 'Document uploaded successfully.',
-            docType,
-            path: relativePath,
-            documents: result.rows[0].documents || {},
-            photoUrl: result.rows[0].photo_url,
+        return res.status(200).json({
+            success: true,
+            fileUrl: fileUrl
         });
     } catch (err) {
-        // Clean up uploaded file on error
-        if (req.file?.path && fs.existsSync(req.file.path)) {
-            fs.unlinkSync(req.file.path);
+        if (req.file?.path) {
+            require('fs').unlinkSync(req.file.path);
         }
         next(err);
     }
 });
 
 // ─── POST /students/me/submit ─────────────────────────────────────────────────
-router.post('/me/submit', async (req, res, next) => {
+router.post('/me/submit', authorizeRoles('student'), async (req, res, next) => {
     try {
         const userId = req.user.userId;
         await pool.query(
@@ -367,7 +359,7 @@ router.post('/me/submit', async (req, res, next) => {
 });
 
 // ─── POST /students/me/request-edit ──────────────────────────────────────────
-router.post('/me/request-edit', async (req, res, next) => {
+router.post('/me/request-edit', authorizeRoles('student'), async (req, res, next) => {
     try {
         const userId = req.user.userId;
         await pool.query(
@@ -383,7 +375,7 @@ router.post('/me/request-edit', async (req, res, next) => {
 });
 
 // ─── GET /students — admin/HOD/mentor scoped list ─────────────────────────────
-router.get('/', async (req, res, next) => {
+router.get('/', authorizeRoles('admin', 'hod', 'cluster_hod', 'principal', 'technical_director', 'mentor'), async (req, res, next) => {
     try {
         const { page = 1, limit = 20 } = req.query;
         const offset = (parseInt(page) - 1) * parseInt(limit);
@@ -408,7 +400,7 @@ router.get('/', async (req, res, next) => {
 });
 
 // ─── GET /students/:id ────────────────────────────────────────────────────────
-router.get('/:id', async (req, res, next) => {
+router.get('/:id', authorizeRoles('admin', 'hod', 'cluster_hod', 'principal', 'technical_director', 'mentor'), async (req, res, next) => {
     try {
         const result = await pool.query(
             'SELECT * FROM student_profiles WHERE student_id = $1',
@@ -424,7 +416,7 @@ router.get('/:id', async (req, res, next) => {
 });
 
 // ─── POST /students/:id/approve-edit ─────────────────────────────────────────
-router.post('/:id/approve-edit', async (req, res, next) => {
+router.post('/:id/approve-edit', authorizeRoles('mentor', 'admin'), async (req, res, next) => {
     try {
         await pool.query(
             `UPDATE student_profiles
@@ -442,7 +434,7 @@ router.post('/:id/approve-edit', async (req, res, next) => {
 });
 
 // ─── POST /students/:id/quota-request ────────────────────────────────────────
-router.post('/:id/quota-request', async (req, res, next) => {
+router.post('/:id/quota-request', authorizeRoles('mentor', 'admin'), async (req, res, next) => {
     try {
         await pool.query(
             `UPDATE student_profiles
@@ -458,7 +450,7 @@ router.post('/:id/quota-request', async (req, res, next) => {
 });
 
 // ─── POST /students/:id/scholarship-request ──────────────────────────────────
-router.post('/:id/scholarship-request', async (req, res, next) => {
+router.post('/:id/scholarship-request', authorizeRoles('mentor', 'admin'), async (req, res, next) => {
     try {
         await pool.query(
             `UPDATE student_profiles

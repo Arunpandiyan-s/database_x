@@ -8,8 +8,8 @@ const { verifyFirebaseToken } = require('./middleware/auth.middleware');
 const { blockArchivedUsers } = require('./middleware/lifecycle.middleware');
 
 // ─── Route Imports ────────────────────────────────────────────────────────────
-const authRoutes = require('./routes/auth.routes');
-const studentRoutes = require('./routes/student.routes');
+const authRoutes = require('./routes/auth.routes.v2');
+const studentRoutes = require('./routes/student.routes.v2');
 const leaveRoutes = require('./routes/leave.routes');
 const odRoutes = require('./routes/od.routes');
 const resultsRoutes = require('./routes/results.routes');
@@ -20,30 +20,25 @@ const searchRoutes = require('./routes/search.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 const auditRoutes = require('./routes/audit.routes');
 const parentRoutes = require('./routes/parent.routes');
+const hierarchyRoutes = require('./routes/hierarchy.routes');
+const adminRoutes = require('./routes/admin.routes');
 
 const app = express();
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
-    .split(',')
-    .map(o => o.trim())
-    .filter(Boolean);
+app.use(cors({
+    origin: ['http://localhost:8080', 'http://localhost:5173'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'X-Demo-Role',
+        'X-Demo-Email'
+    ],
+    credentials: true
+}));
 
-const corsOptions = {
-    origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin)) {
-            return callback(null, true);
-        }
-        return callback(new Error(`CORS policy: origin "${origin}" is not allowed`));
-    },
-    credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    preflightContinue: false,
-    optionsSuccessStatus: 204,
-};
-
-app.use(cors(corsOptions));
+app.options(/.*/, cors());
 
 // ─── Security Headers ─────────────────────────────────────────────────────────
 app.use(helmet({
@@ -85,18 +80,20 @@ app.use('/api/v1', verifyFirebaseToken, blockArchivedUsers);
 // ─── PROTECTED ROUTES ─────────────────────────────────────────────────────────
 app.use('/api/v1/students', studentRoutes);
 app.use('/api/v1/leaves', leaveRoutes);
-app.use('/api/v1/od', odRoutes);
+app.use('/api/v1/ods', odRoutes);
 app.use('/api/v1/results', resultsRoutes);
 app.use('/api/v1/attendance', attendanceRoutes);
-app.use('/api/v1/feed', feedRoutes);
+app.use('/api/v1/feeds', feedRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/search', searchRoutes);
 app.use('/api/v1/dashboard', dashboardRoutes);
 app.use('/api/v1/audit', auditRoutes);
-app.use('/api/v1/parent', parentRoutes);
+app.use('/api/v1/parents', parentRoutes);
+app.use('/api/v1/hierarchy', hierarchyRoutes);
+app.use('/api/v1/admin', adminRoutes);
 
-// ─── Static uploaded files (auth-gated) ───────────────────────────────────────
-app.use('/uploads', verifyFirebaseToken, express.static(path.join(__dirname, 'uploads')));
+// ─── Static uploaded files (Public) ───────────────────────────────────────
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // ─── Central Error Handler ────────────────────────────────────────────────────
 app.use(errorHandler);

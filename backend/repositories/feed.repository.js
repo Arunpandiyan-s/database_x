@@ -38,14 +38,63 @@ class FeedRepository {
         return { rows: rows.rows, total: parseInt(count.rows[0].count) };
     }
 
-    async createPost({ title, content, type, authorId, authorRole, studentName, department, collegeId }) {
+    async listAllPosts({ collegeId, status, type, limit, offset, bypassCollegeScope }) {
+        const conditions = [`fp.status != 'archived'`];
+        const params = [];
+        let idx = 1;
+
+        if (!bypassCollegeScope && collegeId) {
+            conditions.push(`(fp.college_id = $${idx++} OR fp.college_id IS NULL)`);
+            params.push(collegeId);
+        }
+
+        if (status) {
+            conditions.push(`fp.status = $${idx++}`);
+            params.push(status);
+        }
+
+        if (type && ['announcement', 'achievement'].includes(type)) {
+            conditions.push(`fp.type = $${idx++}`);
+            params.push(type);
+        }
+
+        const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+        const rows = await this.db.query(
+            `SELECT fp.*, u.email AS author_email FROM feed_posts fp
+             LEFT JOIN users u ON u.id = fp.author_id
+             ${whereClause}
+             ORDER BY fp.created_at DESC
+             LIMIT $${idx++} OFFSET $${idx++}`,
+            [...params, limit, offset]
+        );
+
+        const count = await this.db.query(
+            `SELECT COUNT(*) FROM feed_posts fp ${whereClause}`,
+            params
+        );
+
+        return { rows: rows.rows, total: parseInt(count.rows[0].count) };
+    }
+
+    async createPost({ title, content, type, authorId, authorRole, studentName, department, collegeId, status = 'submitted_to_admin' }) {
         const r = await this.db.query(
             `INSERT INTO feed_posts (title, content, type, author_id, author_role, student_name, department, college_id, status)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'published')
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
              RETURNING *`,
-            [title, content, type, authorId, authorRole, studentName, department, collegeId]
+            [title, content, type, authorId, authorRole, studentName, department, collegeId, status]
         );
         return r.rows[0];
+    }
+
+    async updatePostStatus(id, status) {
+        const r = await this.db.query(
+            `UPDATE feed_posts SET status = $1, updated_at = NOW()
+             WHERE id = $2 AND status != 'archived'
+             RETURNING *`,
+            [status, id]
+        );
+        return r.rows[0] || null;
     }
 
     async archivePost(id) {

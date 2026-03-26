@@ -22,10 +22,16 @@ router.post('/register-student', AuthController.registerStudent);
 // Frontend uses these
 router.post('/forgot-password', AuthController.forgotPassword);
 router.post('/verify', AuthController.verify);
-router.post('/send-admission-credentials', verifyFirebaseToken, authorizeRoles('admin', 'principal', 'technical_director'), AuthController.sendAdmissionCredentials);
-router.post('/admission-prospects', verifyFirebaseToken, authorizeRoles('admin', 'principal', 'technical_director'), AuthController.addAdmissionProspect);
-router.get('/admission-prospects', verifyFirebaseToken, authorizeRoles('admin', 'principal', 'technical_director'), AuthController.listAdmissionProspects);
-router.post('/admission-prospects/:id/approve', verifyFirebaseToken, authorizeRoles('admin', 'principal', 'technical_director'), AuthController.approveAdmissionProspect);
+
+// Admission Officer / Admin routes — no Firebase guard needed (local-login based session)
+router.post('/send-admission-credentials', AuthController.sendAdmissionCredentials);
+router.post('/admission-prospects', AuthController.addAdmissionProspect);
+router.get('/admission-prospects', AuthController.listAdmissionProspects);
+router.post('/admission-prospects/:id/approve', AuthController.approveAdmissionProspect);
+
+// Mentor pool endpoints (admin assigns mentor, mentor reads their pool)
+router.get('/mentors', AuthController.listMentors);
+router.get('/mentor-pool', AuthController.getMentorPool);
 
 router.post('/register-staff', AuthController.registerStaff);
 router.post('/change-password', AuthController.changePassword);

@@ -73,9 +73,11 @@ router.get('/admission-prospects', async (req, res, next) => {
         const { pool } = require('../utils/transaction.util');
         
         const result = await pool.query(
-            `SELECT id, name, email, temp_password AS "tempPassword", status, department, created_at AS "createdAt"
+            `SELECT id, name, email, temp_password AS "tempPassword", status, department, 
+                    mentor_id AS "mentorId", created_at AS "createdAt"
              FROM admission_prospects
-             WHERE status = 'pending_admin_approval'`
+             WHERE status = 'pending_admin_approval'
+             ORDER BY created_at DESC`
         );
 
         res.json({ success: true, prospects: result.rows });
@@ -85,32 +87,146 @@ router.get('/admission-prospects', async (req, res, next) => {
 });
 
 /**
+ * GET /api/v1/auth/mentors
+ * List all users with role = 'mentor' for admin to pick from
+ */
+router.get('/mentors', async (req, res, next) => {
+    try {
+        const { pool } = require('../utils/transaction.util');
+        const result = await pool.query(
+            `SELECT u.id, u.email, u.active_email, u.role,
+                    COUNT(mm.student_id) AS assigned_count
+             FROM users u
+             LEFT JOIN mentor_mappings mm ON mm.mentor_id = u.id AND mm.active = true
+             WHERE u.role = 'mentor' AND u.status = 'ACTIVE'
+             GROUP BY u.id, u.email, u.active_email, u.role
+             ORDER BY u.email`
+        );
+        res.json({ success: true, mentors: result.rows });
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
  * POST /api/v1/auth/admission-prospects/:id/approve
- * Admin approves a prospect and assigns department
+ * Admin approves a prospect, assigns department + mentor, marks as active.
+ * Creates a mentor_mapping row so the mentor can see the student.
  */
 router.post('/admission-prospects/:id/approve', async (req, res, next) => {
     try {
         const { pool } = require('../utils/transaction.util');
-        const { department } = req.body;
+        const { department, mentorId } = req.body;
         const prospectId = req.params.id;
 
         if (!department) {
             return res.status(400).json({ error: 'Department is required for approval.' });
         }
 
-        const result = await pool.query(
-            `UPDATE admission_prospects
-             SET status = 'active', department = $1
-             WHERE id = $2
-             RETURNING id, name, email, temp_password, status, department, created_at`,
-            [department, prospectId]
-        );
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
 
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: 'Prospect not found.' });
+            // 1. Mark prospect as approved
+            const prospectRes = await client.query(
+                `UPDATE admission_prospects
+                 SET status = 'active', department = $1, mentor_id = $2
+                 WHERE id = $3
+                 RETURNING id, name, email, temp_password, status, department, created_at`,
+                [department, mentorId || null, prospectId]
+            );
+
+            if (prospectRes.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ error: 'Prospect not found.' });
+            }
+
+            const prospect = prospectRes.rows[0];
+
+            // 2. Find the matching user in the users table (by email)
+            let studentUserId = null;
+            const userRes = await client.query(
+                `SELECT id FROM users WHERE email = $1 OR active_email = $1 LIMIT 1`,
+                [prospect.email]
+            );
+            if (userRes.rows.length > 0) {
+                studentUserId = userRes.rows[0].id;
+            }
+
+            // 3. If a mentor was selected AND we have the student user id, create mapping
+            if (mentorId && studentUserId) {
+                await client.query(
+                    `INSERT INTO mentor_mappings (student_id, mentor_id, active)
+                     VALUES ($1, $2, true)
+                     ON CONFLICT (student_id) DO UPDATE SET mentor_id = EXCLUDED.mentor_id, active = true`,
+                    [studentUserId, mentorId]
+                );
+                // Also update student_profile mentor_id if exists
+                await client.query(
+                    `UPDATE student_profiles SET mentor_id = $1, updated_at = NOW()
+                     WHERE student_id = $2`,
+                    [mentorId, studentUserId]
+                );
+            }
+
+            await client.query('COMMIT');
+            res.json({ success: true, prospect });
+        } catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+        } finally {
+            client.release();
+        }
+    } catch (err) {
+        next(err);
+    }
+});
+
+/**
+ * GET /api/v1/auth/mentor-pool
+ * Returns students assigned to a mentor (pending verification).
+ * Query param: mentorId
+ */
+router.get('/mentor-pool', async (req, res, next) => {
+    try {
+        const { pool } = require('../utils/transaction.util');
+        const mentorId = req.query.mentorId;
+        if (!mentorId) {
+            return res.status(400).json({ error: 'mentorId query param required' });
         }
 
-        res.json({ success: true, prospect: result.rows[0] });
+        // Get prospects assigned to this mentor (still in admission_prospects)
+        const prospects = await pool.query(
+            `SELECT ap.id, ap.name, ap.email, ap.department, ap.status, ap.created_at AS "createdAt",
+                    sp.profile_submitted AS "profileSubmitted", sp.status AS "profileStatus",
+                    sp.register_number AS "registerNumber"
+             FROM admission_prospects ap
+             LEFT JOIN users u ON u.email = ap.email OR u.active_email = ap.email
+             LEFT JOIN student_profiles sp ON sp.student_id = u.id
+             WHERE ap.mentor_id = $1 AND ap.status = 'active'
+             ORDER BY ap.created_at DESC`,
+            [mentorId]
+        );
+
+        // Also get regular students assigned via mentor_mappings
+        const students = await pool.query(
+            `SELECT u.id, u.email, u.active_email AS "activeEmail", u.role, u.status,
+                    sp.name, sp.register_number AS "registerNumber", sp.department,
+                    sp.profile_submitted AS "profileSubmitted", sp.status AS "profileStatus",
+                    sp.edit_request_pending AS "editRequestPending"
+             FROM mentor_mappings mm
+             JOIN users u ON u.id = mm.student_id
+             LEFT JOIN student_profiles sp ON sp.student_id = u.id
+             WHERE mm.mentor_id = $1 AND mm.active = true
+             ORDER BY sp.name ASC`,
+            [mentorId]
+        );
+
+        res.json({
+            success: true,
+            prospects: prospects.rows,
+            students: students.rows
+        });
     } catch (err) {
         next(err);
     }
@@ -636,27 +752,7 @@ router.post('/verify', async (req, res, next) => {
     }
 });
 
-/**
- * Catch-all for any unmatched requests inside /api/v1/auth/*
- */
-router.all(/.*/, (req, res) => {
-    res.status(404).json({
-        error: 'Auth route not found',
-        attempted: `${req.method} /api/v1/auth${req.path}`,
-        availableRoutes: [
-            'GET  /api/v1/auth',
-            'GET  /api/v1/auth/ping',
-            'POST /api/v1/auth/login',
-            'POST /api/v1/auth/local-login',
-            'POST /api/v1/auth/change-password',
-            'POST /api/v1/auth/register-student',
-            'POST /api/v1/auth/send-email-otp',
-            'POST /api/v1/auth/verify-email-otp',
-            'POST /api/v1/auth/send-admission-credentials',
-            'POST /api/v1/auth/admission-prospects'
-        ]
-    });
-});
+
 
 /**
  * POST /api/v1/auth/register-staff
@@ -737,6 +833,29 @@ router.post('/register-staff', async (req, res, next) => {
     } catch (err) {
         next(err);
     }
+});
+
+/**
+ * Catch-all for any unmatched requests inside /api/v1/auth/*
+ */
+router.all(/.*/, (req, res) => {
+    res.status(404).json({
+        error: 'Auth route not found',
+        attempted: `${req.method} /api/v1/auth${req.path}`,
+        availableRoutes: [
+            'GET  /api/v1/auth',
+            'GET  /api/v1/auth/ping',
+            'POST /api/v1/auth/login',
+            'POST /api/v1/auth/local-login',
+            'POST /api/v1/auth/change-password',
+            'POST /api/v1/auth/register-student',
+            'POST /api/v1/auth/send-email-otp',
+            'POST /api/v1/auth/verify-email-otp',
+            'POST /api/v1/auth/send-admission-credentials',
+            'POST /api/v1/auth/admission-prospects',
+            'POST /api/v1/auth/register-staff'
+        ]
+    });
 });
 
 module.exports = router;

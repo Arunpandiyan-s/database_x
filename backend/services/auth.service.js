@@ -364,41 +364,49 @@ class AuthService {
                 firebaseUser = await admin.auth().getUserByEmail(email);
                 await admin.auth().updateUser(firebaseUser.uid, { password: tempPassword });
             } else {
-                throw new Error(`Firebase account creation failed: ${fbErr.message}`);
+                const err = new Error(`Firebase account creation failed: ${fbErr.message}`);
+                err.statusCode = 500;
+                throw err;
             }
         }
 
         const studentRole = await this.repo.getRoleByName('student');
         if (!studentRole) {
-            throw new Error("Student role not configured in DB.");
+            const err = new Error("Student role not configured in DB.");
+            err.statusCode = 500;
+            throw err;
         }
-
-        const { pool } = require('../utils/transaction.util');
         
+        let prospect = null;
         let insertedUserId = null;
+
         try {
-            const userRes = await pool.query(`
-                INSERT INTO users (
-                    firebase_uid,
-                    email,
-                    active_email,
-                    role_id,
-                    status
-                )
-                VALUES ($1, $2, $2, $3, 'ACTIVE')
-                ON CONFLICT (email) DO UPDATE SET 
-                    firebase_uid = EXCLUDED.firebase_uid,
-                    status = 'ACTIVE'
-                RETURNING id
-            `, [firebaseUser.uid, email, studentRole.id]);
-            
-            insertedUserId = userRes.rows[0].id;
+            // ✅ 1. Execute DB Operations Inside Atomically Managed Transaction 
+            await withTransactionRetry(async (client) => {
+                const userRes = await client.query(`
+                    INSERT INTO users (
+                        firebase_uid, email, active_email, role_id, status
+                    )
+                    VALUES ($1, $2, $2, $3, 'ACTIVE')
+                    ON CONFLICT (active_email) DO UPDATE SET 
+                        firebase_uid = EXCLUDED.firebase_uid,
+                        status = 'ACTIVE'
+                    RETURNING id
+                `, [firebaseUser.uid, email, studentRole.id]);
+                
+                insertedUserId = userRes.rows[0].id;
+                prospect = await this.repo.upsertAdmissionProspect({ name, email, tempPassword }, client);
+            });
         } catch (dbErr) {
-            throw new Error(`DB sync failed: ${dbErr.message}`);
+            // DB Transaction Failed -> Cleanup Firebase artifact to prevent ghost accounts
+            admin.auth().deleteUser(firebaseUser.uid).catch(() => {});
+            
+            const err = new Error(`Database synchronization failed. Action reverted. Details: ${dbErr.message}`);
+            err.statusCode = 500;
+            throw err;
         }
 
-        const prospect = await this.repo.upsertAdmissionProspect({ name, email, tempPassword });
-
+        // ✅ 2. Attach Custom Claims 
         try {
             await admin.auth().setCustomUserClaims(firebaseUser.uid, {
                 user_id: insertedUserId,
@@ -408,7 +416,16 @@ class AuthService {
             console.error("Failed to set Firebase custom claims", e);
         }
 
-        return { success: true, prospect };
+        // ✅ 3. Send Email AFTER Guaranteed DB Commit
+        let emailWarning = null;
+        try {
+            await EmailService.sendAdmissionCredentials(email, name, tempPassword);
+        } catch (emailErr) {
+            console.error("Email sending failed but DB succeeded:", emailErr.message);
+            emailWarning = "Prospect saved successfully, but email dispatch failed.";
+        }
+
+        return { success: true, prospect, warning: emailWarning };
     }
 
     async listAdmissionProspects() {
@@ -416,19 +433,65 @@ class AuthService {
         return { success: true, prospects };
     }
 
-    async approveAdmissionProspect({ id, department }) {
+    async approveAdmissionProspect({ id, department, mentorId }) {
         if (!department) {
             const err = new Error('department is required');
             err.statusCode = 400;
             throw err;
         }
-        const approved = await this.repo.approveAdmissionProspect(id, department);
-        if (!approved) {
-            const err = new Error('Prospect not found');
-            err.statusCode = 404;
+
+        const { pool } = require('../utils/transaction.util');
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            // 1. Update the prospect record
+            const updateRes = await client.query(
+                `UPDATE admission_prospects
+                 SET status = 'active', department = $1, mentor_id = $2
+                 WHERE id = $3
+                 RETURNING *`,
+                [department, mentorId || null, id]
+            );
+            if (updateRes.rows.length === 0) {
+                await client.query('ROLLBACK');
+                const err = new Error('Prospect not found');
+                err.statusCode = 404;
+                throw err;
+            }
+            const approved = updateRes.rows[0];
+
+            // 2. If a mentor was specified AND student has a user account, create mentor_mapping
+            if (mentorId) {
+                const userRes = await client.query(
+                    `SELECT id FROM users WHERE email = $1 OR active_email = $1 LIMIT 1`,
+                    [approved.email]
+                );
+                if (userRes.rows.length > 0) {
+                    const studentId = userRes.rows[0].id;
+                    await client.query(
+                        `INSERT INTO mentor_mappings (student_id, mentor_id, active)
+                         VALUES ($1, $2, true)
+                         ON CONFLICT (student_id) DO UPDATE
+                           SET mentor_id = EXCLUDED.mentor_id, active = true`,
+                        [studentId, mentorId]
+                    );
+                    await client.query(
+                        `UPDATE student_profiles SET mentor_id = $1, updated_at = NOW()
+                         WHERE student_id = $2`,
+                        [mentorId, studentId]
+                    );
+                }
+            }
+
+            await client.query('COMMIT');
+            return { success: true, prospect: approved };
+        } catch (err) {
+            await client.query('ROLLBACK');
             throw err;
+        } finally {
+            client.release();
         }
-        return { success: true, prospect: approved };
     }
 
     async registerStaff({ email, password, firstName, lastName, role }) {

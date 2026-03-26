@@ -204,8 +204,78 @@ class AuthController {
     static async approveAdmissionProspect(req, res, next) {
         try {
             const service = new AuthService(pool);
-            const result = await service.approveAdmissionProspect({ id: req.params.id, department: req.body?.department });
+            const result = await service.approveAdmissionProspect({
+                id: req.params.id,
+                department: req.body?.department,
+                mentorId: req.body?.mentorId || null,
+            });
             res.json(result);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    /** GET /auth/mentors — list all active mentor users with student count */
+    static async listMentors(_req, res, next) {
+        try {
+            const result = await pool.query(
+                `SELECT u.id, u.email, u.active_email,
+                        COUNT(mm.student_id) AS assigned_count
+                 FROM users u
+                 LEFT JOIN mentor_mappings mm ON mm.mentor_id = u.id AND mm.active = true
+                 WHERE u.role = 'mentor' AND u.status = 'ACTIVE'
+                 GROUP BY u.id, u.email, u.active_email
+                 ORDER BY u.active_email`
+            );
+            res.json({ success: true, mentors: result.rows });
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    /** GET /auth/mentor-pool?mentorId=<uuid> */
+    static async getMentorPool(req, res, next) {
+        try {
+            const { mentorId } = req.query;
+            if (!mentorId) {
+                return res.status(400).json({ error: 'mentorId query param is required' });
+            }
+
+            // Prospects pushed to this mentor by admin (admission_prospects)
+            const prospectsRes = await pool.query(
+                `SELECT ap.id, ap.name, ap.email, ap.department, ap.status,
+                        ap.created_at AS "createdAt",
+                        sp.profile_submitted AS "profileSubmitted",
+                        sp.status AS "profileStatus",
+                        sp.register_number AS "registerNumber"
+                 FROM admission_prospects ap
+                 LEFT JOIN users u ON u.email = ap.email OR u.active_email = ap.email
+                 LEFT JOIN student_profiles sp ON sp.student_id = u.id
+                 WHERE ap.mentor_id = $1 AND ap.status = 'active'
+                 ORDER BY ap.created_at DESC`,
+                [mentorId]
+            );
+
+            // Students linked via mentor_mappings
+            const studentsRes = await pool.query(
+                `SELECT u.id, u.email, u.active_email AS "activeEmail", u.status,
+                        sp.name, sp.register_number AS "registerNumber", sp.department,
+                        sp.profile_submitted AS "profileSubmitted",
+                        sp.status AS "profileStatus",
+                        sp.edit_request_pending AS "editRequestPending"
+                 FROM mentor_mappings mm
+                 JOIN users u ON u.id = mm.student_id
+                 LEFT JOIN student_profiles sp ON sp.student_id = u.id
+                 WHERE mm.mentor_id = $1 AND mm.active = true
+                 ORDER BY COALESCE(sp.name, u.active_email) ASC`,
+                [mentorId]
+            );
+
+            res.json({
+                success: true,
+                prospects: prospectsRes.rows,
+                students: studentsRes.rows,
+            });
         } catch (err) {
             next(err);
         }

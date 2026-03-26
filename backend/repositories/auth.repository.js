@@ -47,11 +47,14 @@ class AuthRepository {
     }
 
     // ─── Admission prospects ───────────────────────────────────────────────────
-    async upsertAdmissionProspect({ name, email, tempPassword }) {
-        const r = await this.db.query(
+    async upsertAdmissionProspect({ name, email, tempPassword }, client = this.db) {
+        const r = await client.query(
             `INSERT INTO admission_prospects (name, email, temp_password, status)
              VALUES ($1, $2, $3, 'pending_admin_approval')
-             ON CONFLICT (email) DO UPDATE SET temp_password = EXCLUDED.temp_password
+             ON CONFLICT (email) DO UPDATE SET 
+                name = EXCLUDED.name,
+                temp_password = EXCLUDED.temp_password,
+                status = EXCLUDED.status
              RETURNING id, name, email, temp_password, status, department, created_at`,
             [name, email, tempPassword]
         );

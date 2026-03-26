@@ -74,8 +74,37 @@ app.use('/api/v1/auth', authLimiter, authRoutes);
 // ─── RATE LIMITING for search ─────────────────────────────────────────────────
 app.use('/api/v1/search', searchLimiter);
 
-// ─── GLOBAL AUTH GUARD — all routes below require Firebase Bearer token ───────
-app.use('/api/v1', verifyFirebaseToken, blockArchivedUsers);
+// ─── GLOBAL AUTH GUARD — protects all non-auth API routes ─────────────────────
+// Uses a path-specific approach so /api/v1/auth/* is NEVER intercepted.
+const PROTECTED_PREFIXES = [
+    '/api/v1/students',
+    '/api/v1/leaves',
+    '/api/v1/ods',
+    '/api/v1/results',
+    '/api/v1/attendance',
+    '/api/v1/feeds',
+    '/api/v1/notifications',
+    '/api/v1/search',
+    '/api/v1/dashboard',
+    '/api/v1/audit',
+    '/api/v1/parents',
+    '/api/v1/hierarchy',
+    '/api/v1/admin',
+];
+app.use((req, res, next) => {
+    const isProtected = PROTECTED_PREFIXES.some(p => req.path.startsWith(p));
+    if (isProtected) {
+        return verifyFirebaseToken(req, res, next);
+    }
+    next();
+});
+app.use((req, res, next) => {
+    const isProtected = PROTECTED_PREFIXES.some(p => req.path.startsWith(p));
+    if (isProtected) {
+        return blockArchivedUsers(req, res, next);
+    }
+    next();
+});
 
 // ─── PROTECTED ROUTES ─────────────────────────────────────────────────────────
 app.use('/api/v1/students', studentRoutes);
